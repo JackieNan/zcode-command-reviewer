@@ -1,0 +1,13 @@
+# 运行时状态：含你的命令历史、缓存与学到的规则，不要提交
+decisions.jsonl
+invocations.jsonl
+review-cache.json
+breaker.json
+learned-rules.json
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

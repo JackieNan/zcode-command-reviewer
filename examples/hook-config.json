@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "enabled": true,
+    "timeoutMs": 20000,
+    "maxOutputBytes": 32768,
+    "events": {
+      "PermissionRequest": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "/usr/bin/python3",
+              "args": ["/Users/you/.zcode/hooks/review-command.py"],
+              "timeoutMs": 18000,
+              "statusMessage": "自动审查命令"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
