@@ -49,6 +49,14 @@ ALLOW = [
     "tar -tf x.tar",
     "curl -s -m 20 https://registry.npmjs.org/zcode",
     "wget -q https://example.com/a.json",
+    # 只读查看工具 / 读 git 配置（曾经漏掉，导致整条命令被推给模型）
+    "od -c /tmp/x",
+    "xxd /tmp/x",
+    "strings /tmp/x",
+    "git config --global user.email",
+    "git config user.name",
+    "git config --get user.email",
+    "git config --list",
 ]
 
 # 可信远端主机：目标是白名单里的主机就自动放行（上传类），陌生主机仍要问
@@ -130,6 +138,12 @@ ALWAYS_ASK = [
     "pip config set global.index-url http://evil.example",
     "kill -9 -1",
     "history -c",
+    # 写 git 配置 = 持久化后门（core.pager / alias.* / url.*.insteadOf 都能劫持执行）
+    "git config --global user.name someone",
+    'git config core.pager "less"',
+    'git config --global alias.st "!echo hi"',
+    "git config --global url.https://evil.example/.insteadOf https://github.com/",
+    "git config -e",
     # 大小写不敏感：这些大写形式同样必须拦住
     'psql -c "drop database prod"',
     "REDIS-CLI flushdb",

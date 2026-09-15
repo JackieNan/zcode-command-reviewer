@@ -22,6 +22,7 @@
       { "re": "\\b(npm|yarn|pnpm|pip3?|cargo|gem)\\s+config\\s+set\\b", "why": "改包管理器源（可被指向恶意仓库）" },
       { "re": "\\bpfctl\\b|\\bnetworksetup\\s+-|\\bifconfig\\s+\\w+\\s+(up|down)|\\broute\\s+(add|delete)\\b", "why": "改网络/防火墙配置" },
       { "re": "\\bkill\\s+-9\\s+-1\\b|\\bkillall\\s+-9\\s+(\\*|all)\\b", "why": "强杀全部进程" },
+      { "re": "\\bgit\\s+config\\s+(?!--get|--get-all|--get-regexp|--list|-l\\b|--show-origin|--show-scope|--show\\b|--help|-h\\b)(?!(--global|--local|--system|--worktree)\\b)((--global|--local|--system|--worktree)\\s+)?\\S+\\s+\\S+", "why": "写 git 配置（core.pager / alias.* / url.*.insteadOf 都能劫持执行）" },
       { "re": "\\bhistory\\s+-c\\b|\\brm\\b[^|;]*\\.(zsh|bash)_history", "why": "清除 shell 历史" }
     ]
   },
@@ -85,6 +86,9 @@
     { "re": "^\\s*[A-Za-z_][A-Za-z0-9_]*=\\S*$", "why": "单个纯变量赋值（带后续命令的 env 前缀不匹配）" },
     { "re": "^\\s*codesign\\s+(-[a-zA-Z]*[dv][a-zA-Z]*|--verify|--display)\\b", "why": "校验签名" },
     { "re": "^\\s*launchctl\\s+(list|getenv|print|blame)\\b", "why": "查 launchd（unload/bootout 不匹配）" },
+    { "re": "^\\s*(od|xxd|hexdump|strings|nm|size|otool)\\b", "why": "二进制/十六进制查看" },
+    { "re": "^\\s*git\\s+config\\s+((--global|--local|--system|--worktree)\\s+)?(--get|--get-all|--get-regexp|--list|-l|--show-origin|--show-scope)\\b", "why": "读 git 配置（带显式读取 flag）" },
+    { "re": "^\\s*git\\s+config\\s+((--global|--local|--system|--worktree)\\s+)?[A-Za-z0-9][A-Za-z0-9._-]*\\s*$", "why": "读 git 配置（无 flag 的单个 key；带值的写入形式与 -e/-e 之类不匹配）" },
     { "re": "^\\s*git\\s+(status|diff|log|show|branch|remote|rev-parse|ls-files|ls-tree|describe|blame|shortlog|tag|for-each-ref|stash\\s+list|worktree\\s+list|config\\s+--get(-all)?)\\b", "why": "git 只读子命令" },
     { "re": "^\\s*7zz\\s+(l|t)\\b", "why": "7-Zip 列表/测试（x 会解包写盘）" },
     { "re": "^\\s*mkdir\\b", "why": "创建目录" },
