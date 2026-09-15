@@ -174,6 +174,35 @@ def _unquote(tok: str) -> str:
     return tok
 
 
+# shell 结构性关键字：它们只是语法骨架，本身没有副作用。segment 以它们开头时剥掉再判，
+# 否则 `if` / `then` / `else` / `fi` 会被当成四条「未白名单」的命令，
+# 让整条带条件判断的命令落到模型那儿（卡片要闪 2~4 秒）。
+STRUCTURAL_KEYWORDS = {
+    "if", "then", "elif", "else", "fi",
+    "for", "while", "until", "do", "done",
+    "case", "esac", "select", "time", "!", "{", "}",
+}
+
+
+def _strip_structural(segment: str) -> str:
+    """剥掉开头的结构性关键字；整段只是语法骨架时返回空串。
+
+    `for` / `case` / `select` 的「头部」（如 `for f in a b c`）不执行任何东西——
+    真正要审的是循环体，而那些体会作为独立 segment 被逐段检查。
+    条件本身（`while <cmd>`、`until <cmd>`、`if <cmd>`）不剥，要照常审。
+    """
+    toks = segment.split()
+    i = 0
+    while i < len(toks) and toks[i] in STRUCTURAL_KEYWORDS:
+        kw = toks[i]
+        if kw in ("for", "case", "select"):
+            return ""  # 头部整段是骨架
+        i += 1
+    if i == 0:
+        return segment
+    return " ".join(toks[i:])
+
+
 def _looks_like_host(tok: str) -> bool:
     """粗判一个 token 是不是主机/别名（不是 flag、不是赋值、不是路径、不是带引号的命令）。"""
     if not tok or tok[0] == "-" or "=" in tok:
@@ -283,12 +312,15 @@ def decide(command: str, policy: dict, depth: int = 0) -> tuple[str, str, bool]:
     used_learned = False
     used_remote = None
     for seg in segments:
-        if any(_safe_match(p, seg) for p in policy["allow"]):
+        core = _strip_structural(seg)
+        if not core:
+            continue  # 只剩语法骨架（fi / done / }），无副作用
+        if any(_safe_match(p, core) for p in policy["allow"]):
             continue
-        if learned and learn_match(seg, learned):
+        if learned and learn_match(core, learned):
             used_learned = True
             continue
-        hit = trusted_remote_check(seg, tr, policy, depth)
+        hit = trusted_remote_check(core, tr, policy, depth)
         if hit and hit[0] == "deny":
             return "deny", hit[1], True
         if hit:
