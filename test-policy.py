@@ -242,8 +242,9 @@ def main() -> int:
     groups = (
         ("ALLOW", ALLOW, "allow"),
         ("ASK", ASK, "ask"),
-        ("SENSITIVE", SENSITIVE, "ask"),
-        ("ALWAYS_ASK", ALWAYS_ASK, "ask"),
+        # terminal_ask_mode = "deny"：机密路径与不可逆动作现在是直接拒绝（不弹窗）
+        ("SENSITIVE", SENSITIVE, "deny"),
+        ("ALWAYS_ASK", ALWAYS_ASK, "deny"),
         ("TRUSTED_REMOTE", TRUSTED_REMOTE, "allow"),
         ("DENY", DENY, "deny"),
     )
