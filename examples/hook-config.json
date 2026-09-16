@@ -16,6 +16,18 @@
               "statusMessage": "自动审查命令"
             }
           ]
+        },
+        {
+          "matcher": "WebFetch|WebSearch|web_search",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "/usr/bin/python3",
+              "args": ["/Users/you/.zcode/hooks/review-command.py"],
+              "timeoutMs": 18000,
+              "statusMessage": "自动放行网页查询"
+            }
+          ]
         }
       ]
     }
