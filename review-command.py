@@ -279,7 +279,115 @@ def trusted_remote_check(segment: str, cfg: dict, policy: dict, depth: int = 0):
     return None
 
 
-def decide(command: str, policy: dict, depth: int = 0) -> tuple[str, str, bool]:
+SAFE_WRITE_PREFIXES = ("/tmp/", "/private/tmp/", "/var/tmp/")
+
+
+def _redirect_target_safe(target: str, allow_relative: bool = True) -> bool:
+    """重定向目标是否落在「写了也没关系」的位置。
+
+    allow_relative 只在**命令里没有 cd** 时才为真 —— 因为相对路径落在 cwd（工作区）里，
+    而一旦有 `cd /etc && echo x > hosts` 这种，相对路径就可能是任意目录。这条是实测抓到的
+    真实漏洞：不加这个约束，`cd /etc && echo x > hosts` 会被当成本地只读命令放行。
+    """
+    t = target.strip().strip('"').strip("'")
+    if not t:
+        return False
+    if t == "/dev/null" or t.startswith(SAFE_WRITE_PREFIXES):
+        return True
+    if t.startswith(("/", "~", "$")):
+        return False
+    if not allow_relative:
+        return False
+    return ".." not in t.split("/")
+
+
+def _has_cd_segment(prepared: str) -> bool:
+    """命令里是否存在真正的 cd 命令（决定相对路径重定向能否视为落在工作区内）。"""
+    return bool(re.search(r"(^|[;&|()\n])\s*cd\s", prepared))
+
+
+def _cd_stays_inside(prepared: str, cwd: str) -> bool:
+    """命令里所有 cd 的目标解析后都在工作区内 → 相对路径重定向才算安全。
+
+    `cd /etc && echo x > hosts` 这种必须挡住（实测抓到的漏洞）；而
+    `cd <工作区> && cmd > out` 是日常写法，应当放行。没有 cwd 信息时退回「有 cd 就不信」。
+    """
+    cds = re.findall(r"(?:^|[;&|()\n])\s*cd(?:\s+(\"[^\"]*\"|'[^']*'|[^\s;&|()]+))?", prepared)
+    if not cds and not _has_cd_segment(prepared):
+        return True
+    if not cwd:
+        return False
+    try:
+        root = Path(cwd).resolve()
+    except Exception:
+        return False
+    for raw in cds:
+        target = (raw or "~").strip("'\"")
+        try:
+            p = Path(os.path.expanduser(target))
+            if not p.is_absolute():
+                p = root / p
+            p = p.resolve()
+        except Exception:
+            return False
+        if p != root and root not in p.parents:
+            return False
+    return True
+
+
+def strip_safe_redirections(command: str, allow_relative: bool = True) -> str | None:
+    """去掉目标安全的重定向；任一目标不安全就返回 None（整条保持原样，交模型）。
+
+    判据是「写文件本身无害」：往工作区或 /tmp 写文件不执行任何东西；而读凭据
+    （`cat ~/.ssh/id_rsa > …`）已被 sensitive 层挡在前面，写系统目录/启动文件已被 deny 挡住。
+    """
+    pat = re.compile(r"([0-9]?&?>>?|<<?-?)\s*(\"[^\"]*\"|'[^']*'|[^\s;&|<>()]+)")
+    state = {"ok": True}
+
+    def repl(m: re.Match[str]) -> str:
+        op, tgt = m.group(1), m.group(2)
+        if op.startswith("<<"):
+            # 只放行「带引号定界符」的 heredoc 标记（正文已在前一步当作数据剥掉）
+            if len(tgt) > 2 and tgt[:1] in ("'", '"'):
+                return " "
+        elif _redirect_target_safe(tgt, allow_relative):
+            return " "
+        state["ok"] = False
+        return m.group(0)
+
+    out = pat.sub(repl, command)
+    return out if state["ok"] else None
+
+
+def strip_quoted_heredocs(command: str) -> str:
+    """把「带引号定界符」的 heredoc 正文（直到定界符那一行）当作数据移除。
+
+    只处理带引号定界符、且定界符是该行最后一个 token 的情形：
+      1. 不带引号的定界符会做变量展开，正文里的 $(...) 会真的执行 —— 绝不剥；
+      2. 要求出现在行尾，避免把 `echo "见 <<'EOF' 文档"` 这种字符串误判成 heredoc
+         —— 误判会删掉后面真正的命令，那是安全性问题，不只是误判。
+    正文剥掉后，`<<'PY'` 这个标记交给 strip_safe_redirections 一并去掉。
+    """
+    lines = command.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.search(r"<<-?\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1\s*$", line)
+        out.append(line)
+        i += 1
+        if not m:
+            continue
+        delim = m.group(2)
+        while i < len(lines):
+            if lines[i].strip() == delim:
+                i += 1
+                break
+            i += 1
+    return "\n".join(out)
+
+
+def decide(command: str, policy: dict, depth: int = 0, cwd: str = "") -> tuple[str, str, bool]:
     """返回 (行动, 理由, 是否终局)。
 
     行动 ∈ {allow, deny, ask}；终局=True 表示不要再交给模型审查。
@@ -306,7 +414,16 @@ def decide(command: str, policy: dict, depth: int = 0) -> tuple[str, str, bool]:
             continue
 
     # 3) 只读判定：消掉无害重定向后，逐段核对白名单
-    segments, unsafe = scan(normalize(command))
+    #    先剥「带引号的 heredoc 正文」（那是数据，不是命令），再把目标安全的重定向视为透明
+    prepared = normalize(strip_quoted_heredocs(command))
+    segments, unsafe = scan(prepared)
+    if unsafe and "重定向" in unsafe:
+        # cd 都在工作区内时，相对路径重定向才可视为工作区内的写入
+        rewritten = strip_safe_redirections(prepared, allow_relative=_cd_stays_inside(prepared, cwd))
+        if rewritten is not None:
+            seg2, unsafe2 = scan(rewritten)
+            if seg2 and not unsafe2:
+                prepared, segments, unsafe = rewritten, seg2, None
     if unsafe:
         return "ask", f"{unsafe}，无法证明只读", False
     if not segments:
@@ -706,20 +823,21 @@ def learn_candidates(command: str, cfg: dict, policy: dict) -> list[list[str]]:
         if re.search(r"[*?\[\]{}~]", seg):
             return []  # 通配 / 花括号展开
         toks = seg.split()
-        if not toks or "/" in toks[0] or toks[0].startswith("."):
-            return []  # 绝对路径 / ./script.sh：不学
+        if not toks:
+            return []
         head = toks[0]
-        if head in runs:
+        base = head.rsplit("/", 1)[-1]  # ./gradlew、/Users/x/flutter/bin/flutter 按 basename 判
+        if base in runs:
             arity = 3
-        elif head in subs:
+        elif base in subs:
             arity = 2
-        elif head in heads:
+        elif base in heads:
             arity = 1
         else:
             return []  # 头不在可学名单：整条不学
         if len(toks) < arity:
             continue
-        if any(t in forbid for t in toks[: arity + 1]):
+        if any(t in forbid for t in toks[: arity + 2]):
             return []
         out.append(toks[:arity])
     return out
@@ -846,7 +964,7 @@ def web_decision(tool_input, cfg: dict) -> tuple[str, str]:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--test":
         command = " ".join(sys.argv[2:])
-        action, why, _ = decide(command, load_policy())
+        action, why, _ = decide(command, load_policy(), cwd=str(Path.cwd()))
         print(f"{action.upper():5s} {why}")
         return 0
 
@@ -872,7 +990,7 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--review":
         command = " ".join(sys.argv[2:])
         policy = load_policy()
-        local_action, local_why, terminal = decide(command, policy)
+        local_action, local_why, terminal = decide(command, policy, cwd=str(Path.cwd()))
         print(f"local: {local_action.upper():5s} {local_why}")
         if local_action == "ask" and not terminal:
             r = model_review(command, str(Path.cwd()), policy)
@@ -933,7 +1051,7 @@ def main() -> int:
         if tool != "Bash":
             return 0
         command = cmd_of(payload.get("tool_input"))
-        action, why, terminal = decide(command, policy)
+        action, why, terminal = decide(command, policy, cwd=str(payload.get("cwd") or ""))
         local_source = "learned" if (action == "allow" and why.startswith("命中已学前缀规则")) else None
 
         # 本地规则判不准时，再让便宜的模型看一眼（关思考 + 缓存，尽量省 token）

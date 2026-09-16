@@ -47,10 +47,10 @@
     "min_observations": 2,
     "ttl_days": 30,
     "max_rules": 200,
-    "heads": ["pytest", "ruff", "black", "isort", "mypy", "flake8", "eslint", "prettier", "tsc", "vitest", "jest", "playwright", "make", "cmake", "ninja", "bazel", "tsx"],
-    "subcommand_heads": ["cargo", "go", "git", "gradle", "mvn", "swift", "xcodebuild"],
+    "heads": ["pytest", "ruff", "black", "isort", "mypy", "flake8", "eslint", "prettier", "tsc", "vitest", "jest", "playwright", "make", "cmake", "ninja", "bazel", "tsx", "gradlew"],
+    "subcommand_heads": ["cargo", "go", "git", "gradle", "mvn", "swift", "xcodebuild", "adb", "flutter", "dart"],
     "run_heads": ["npm", "pnpm", "yarn", "bun"],
-    "extra_forbid_tokens": ["install", "add", "remove", "rm", "prune", "uninstall", "update", "upgrade", "publish", "push", "deploy", "init", "create", "new", "delete", "drop", "clean", "-i", "-f", "--force", "--hard", "--delete", "-exec", "--exec", "-y", "--yes", "--global", "-g", "sudo"]
+    "extra_forbid_tokens": ["install", "add", "remove", "rm", "prune", "uninstall", "update", "upgrade", "publish", "push", "deploy", "init", "create", "new", "delete", "drop", "clean", "shell", "-i", "-f", "--force", "--hard", "--delete", "-exec", "--exec", "-y", "--yes", "--global", "-g", "sudo"]
   },
   "model_review": {
     "_note": "本地规则判不准时的二次审查。关思考 + 极小 max_tokens + 本地缓存，尽量少烧 token。baseURL/apiKey 从 app 的 provider 配置里按 provider_id 取，不在这里重复存密钥。",
@@ -79,6 +79,7 @@
     { "re": "^\\s*(which|type|command\\s+-v)\\b", "why": "查可执行文件位置" },
     { "re": "^\\s*env\\s*$", "why": "打印环境变量（仅裸 env，带赋值会执行命令）" },
     { "re": "^\\s*printenv\\b", "why": "打印环境变量" },
+    { "re": "^\\s*export\\s+(-p\\s*$|[A-Za-z_][A-Za-z0-9_]*=)", "why": "export 变量赋值（只影响本条命令的环境）" },
     { "re": "^\\s*(date|uname|sw_vers|hostname|uptime|id|whoami|locale|sleep)\\b", "why": "系统信息 / 等待" },
     { "re": "^\\s*(ps|lsof|netstat|vm_stat|system_profiler)\\b", "why": "查看进程/连接/资源" },
     { "re": "^\\s*(grep|egrep|fgrep|rg)\\b", "why": "搜索文本" },
