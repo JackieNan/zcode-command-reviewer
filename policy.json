@@ -33,6 +33,14 @@
     "shell_commands": ["ssh"],
     "_modes_note": "上传类：所有远端目标都必须在 hosts 里才放行。ssh：主机可信后，把引号里的远端命令取出来递归过一遍本地规则（deny 仍然优先，白名单/已学规则命中才放行，其余交模型）。"
   },
+  "web": {
+    "_note": "WebFetch / WebSearch 自动放行。这两个工具不执行本地命令，风险面是「把外部内容带进上下文」（prompt injection，审查提示词已把工具输出标为 UNTRUSTED）与「借 URL 外发数据」（需要 agent 先拿到秘密，而读凭据已被 sensitive 层强制人工）。用 curl 抓网页本来就已本地放行，所以这一层不新增能力面。默认只把本机地址与黑名单域名交回人工。",
+    "enabled": true,
+    "tools": ["WebFetch", "WebSearch", "web_search"],
+    "block_localhost": true,
+    "blocked_hosts": [],
+    "_tools_note": "ZCode 里 WebFetch 的权限描述是 needsApproval:true / sideEffectScope:network，所以每个新域名都会问一次；WebSearch 是 needsApproval:false，本来就不问。要覆盖这两个工具，hook 的 matcher 必须写上它们（大小写敏感），只写 Bash 不会生效。"
+  },
   "learn": {
     "_note": "学习式前缀规则：只从「模型判 ALLOW」的简单命令里学 token 前缀（仿 Codex 的 prefix_rule），下次同类命令直接本地放行。头不在 heads/subcommand_heads/run_heads 里的一律不学 —— 解释器（python/node/sh）、安装、删除、网络外发类永不学习。规则存在 learned-rules.json，可 --learned 查看、--forget 删除。",
     "enabled": true,

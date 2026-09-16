@@ -162,6 +162,24 @@ ALWAYS_ASK = [
     "REDIS-CLI flushdb",
 ]
 
+# 网页查询工具（WebFetch / WebSearch）：公开地址放行；本机/内网地址交回人工
+WEB_ALLOW = [
+    "https://docs.python.org/3/library/re.html",
+    "https://github.com/openai/codex",
+    "https://registry.npmjs.org/zcode-cli",
+    "https://arxiv.org/abs/2401.00001",
+]
+WEB_ASK = [
+    "http://127.0.0.1:8317/v1/models",
+    "http://localhost:8080/x",
+    "http://192.168.1.10:5000/",
+    "http://10.0.0.5/webui",
+    "http://172.16.3.4/x",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://nas.local/x",
+    "file:///etc/passwd",
+]
+
 DENY = [
     "rm -rf /",
     "rm -rf ~",    "rm -rf $HOME",
@@ -194,6 +212,14 @@ def verdict(command: str) -> str:
     return (out.stdout.strip().split(" ")[0] or "ERROR").lower()
 
 
+def web_verdict(url: str) -> str:
+    out = subprocess.run(
+        [sys.executable, str(HOOK), "--web-test", url],
+        capture_output=True, text=True,
+    )
+    return (out.stdout.strip().split(" ")[0] or "ERROR").lower()
+
+
 def main() -> int:
     fail = 0
     groups = (
@@ -210,7 +236,13 @@ def main() -> int:
             if got != expected:
                 fail += 1
                 print(f"FAIL  期望 {expected:5s} 实际 {got:5s}  {c[:78]!r}")
-    total = sum(len(c) for _, c, _ in groups)
+    for name, cases, expected in (("WEB_ALLOW", WEB_ALLOW, "allow"), ("WEB_ASK", WEB_ASK, "ask")):
+        for c in cases:
+            got = web_verdict(c)
+            if got != expected:
+                fail += 1
+                print(f"FAIL  期望 {expected:5s} 实际 {got:5s}  [web] {c[:70]!r}")
+    total = sum(len(c) for _, c, _ in groups) + len(WEB_ALLOW) + len(WEB_ASK)
     if fail == 0:
         print(f"ALL PASS ({total} 条用例)")
     else:

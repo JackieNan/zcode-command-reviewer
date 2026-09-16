@@ -33,6 +33,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 HOOK_DIR = Path(__file__).resolve().parent
 POLICY_PATH = HOOK_DIR / "policy.json"
@@ -64,6 +65,9 @@ def load_policy() -> dict:
         learn = {"enabled": False}
     tr = raw.get("trusted_remote")
     trusted_remote = tr if isinstance(tr, dict) else {}
+    web = raw.get("web")
+    if not isinstance(web, dict):
+        web = {"enabled": False}
     # 学到的规则在这里加载一次，供 decide() 逐段匹配
     learned_rules = learn_load(learn).get("rules", []) if learn.get("enabled") else []
     sensitive = [
@@ -88,6 +92,7 @@ def load_policy() -> dict:
         "learn": learn,
         "learned_rules": learned_rules,
         "trusted_remote": trusted_remote,
+        "web": web,
     }
 
 
@@ -782,11 +787,74 @@ def cmd_of(tool_input) -> str:
     return ""
 
 
+# --------------------------------------------------------------------------
+# 网页查询工具（WebFetch / WebSearch）
+#
+# 这两个工具不执行本地命令，所以不走 Bash 的段匹配；它们的风险面只有两个：
+#   1. 把外部内容带进上下文（prompt injection）—— 审查提示词已把工具输出标为
+#      UNTRUSTED，而且用 curl 抓网页本来就已本地放行，所以放行它们不新增能力面；
+#   2. 借 URL 外发数据 —— 前提是 agent 已拿到秘密，而读凭据已被 sensitive 层挡住。
+# 默认放行，只把「本机地址」与黑名单域名交回人工：本机常跑着持有 API key 的代理，
+# 那是最值得防的 SSRF 目标（例如 Clash / 各类 CPA 网关）。
+# --------------------------------------------------------------------------
+
+LOOPBACK_HOST = re.compile(r"^(localhost|127(\.\d+){1,3}|0\.0\.0\.0|\[?::1\]?)(\.|$)", re.I)
+PRIVATE_HOST = re.compile(
+    r"^(10(\.\d+){3}|192\.168(\.\d+){2}|172\.(1[6-9]|2\d|3[01])(\.\d+){2}|169\.254(\.\d+){2})$")
+
+
+def _is_local_host(host: str) -> bool:
+    """本机 / 内网 / 局域网名：这些是最值得防的 SSRF 目标（本机常跑着持有 API key 的代理）。"""
+    return (bool(LOOPBACK_HOST.match(host)) or bool(PRIVATE_HOST.match(host))
+            or host.endswith(".local") or host.endswith(".internal") or host.endswith(".localdomain"))
+
+
+def _web_urls(tool_input) -> list[str]:
+    out: list[str] = []
+    if isinstance(tool_input, dict):
+        for key in ("url", "urls", "uri"):
+            v = tool_input.get(key)
+            if isinstance(v, str):
+                out.append(v)
+            elif isinstance(v, list):
+                out.extend(x for x in v if isinstance(x, str))
+    return out
+
+
+def web_decision(tool_input, cfg: dict) -> tuple[str, str]:
+    """返回 (action, why)。ask = 交回人工（这两类没有判断余地，也不送模型）。"""
+    if not cfg.get("enabled", True):
+        return "ask", "web 自动放行已关闭"
+    urls = _web_urls(tool_input)
+    if not urls:
+        return "allow", "网页查询（无显式 URL，如 WebSearch）"
+    blocked = {str(h).lower() for h in (cfg.get("blocked_hosts") or [])}
+    hosts = set()
+    for u in urls:
+        try:
+            host = (urlparse(u).hostname or "").lower()
+        except Exception:
+            host = ""
+        if cfg.get("block_localhost", True) and (not host or _is_local_host(host)):
+            return "ask", f"目标是本机或内网地址（{host or u[:40]}），交回人工确认"
+        if host in blocked:
+            return "ask", f"域名在黑名单里（{host}）"
+        hosts.add(host)
+    return "allow", f"网页查询：{', '.join(sorted(hosts))[:80]}"
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--test":
         command = " ".join(sys.argv[2:])
         action, why, _ = decide(command, load_policy())
         print(f"{action.upper():5s} {why}")
+        return 0
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--web-test":
+        target = " ".join(sys.argv[2:])
+        w_cfg = load_policy().get("web") or {}
+        w_action, w_why = web_decision({"url": target} if target else {}, w_cfg)
+        print(f"{w_action.upper():5s} {w_why}")
         return 0
 
     if len(sys.argv) > 1 and sys.argv[1] == "--stats":
@@ -834,11 +902,37 @@ def main() -> int:
     try:
         event = payload.get("hook_event_name")
         tool = payload.get("tool_name")
-        command = cmd_of(payload.get("tool_input"))
-        if event != "PermissionRequest" or tool != "Bash":
+        if event != "PermissionRequest":
             return 0
 
         policy = load_policy()
+
+        # 网页查询工具：本地判决，不走 Bash 那套段匹配
+        web_cfg = policy.get("web") or {}
+        if tool in set(web_cfg.get("tools") or []):
+            w_action, w_why = web_decision(payload.get("tool_input"), web_cfg)
+            write_log({
+                "action": w_action,
+                "why": w_why,
+                "source": "web",
+                "mode": payload.get("permission_mode"),
+                "risk": payload.get("riskLevel"),
+                "cwd": payload.get("cwd"),
+                "session": payload.get("session_id"),
+                "command": (_web_urls(payload.get("tool_input")) or [tool])[0][:500],
+            })
+            if w_action == "allow":
+                emit({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {"behavior": "allow"},
+                    }
+                })
+            return 0
+
+        if tool != "Bash":
+            return 0
+        command = cmd_of(payload.get("tool_input"))
         action, why, terminal = decide(command, policy)
         local_source = "learned" if (action == "allow" and why.startswith("命中已学前缀规则")) else None
 
@@ -947,6 +1041,13 @@ def print_rules() -> int:
     print("     可学的头：" + "、".join(lg.get("heads") or []) +
           "；子命令头：" + "、".join(lg.get("subcommand_heads") or []) +
           "；run 头：" + "、".join(lg.get("run_heads") or []))
+    w = p.get("web") or {}
+    print(f"\n【7】网页查询（{'、'.join(w.get('tools') or [])}）："
+          f"{'本地自动放行' if w.get('enabled', True) else '已关闭，交回正常流程'}"
+          f"（本机与内网地址{'仍交回人工' if w.get('block_localhost', True) else '也放行'}，"
+          f"额外黑名单 {len(w.get('blocked_hosts') or [])} 个域名）")
+    print("     注意：要让这一层生效，hook 的 matcher 必须写上这些工具名（大小写敏感），"
+          "只写 Bash 不会触发；改 hook 配置需要重启 ZCode。")
     return 0
 
 
