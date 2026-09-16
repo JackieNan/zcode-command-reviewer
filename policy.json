@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "_terminal_ask_note": "terminal_ask_mode：\"deny\"（默认）= 机密路径/不可逆动作直接拒绝、不弹窗；\"ask\" = 弹窗让人确认。deny 更严格（硬阻断），代价是用户要通过对话确认后重试。",
-  "terminal_ask_mode": "deny",
+  "_terminal_ask_note": "terminal_ask_mode：\"ask\"（默认）= 机密路径/不可逆动作弹窗让人确认，用户点一下就继续；\"deny\" = 直接拒绝、不弹窗，更严格但会卡住任务（用户只能在对话里确认后重试）。",
+  "terminal_ask_mode": "ask",
   "_note": "ZCode PermissionRequest hook 的策略表。allow = 可证明只读才自动放行；deny = 不可逆的危险动作直接拒；两者都不命中时交给 model_review 让模型看一眼，模型也不放行才退回人工审批。改完存盘即生效，不需要重启（脚本每次调用都重新读取）。",
   "sensitive": {
     "_note": "命中即强制人工确认，且不再交给模型审查——模型判断不了一个路径是不是机密。放在 deny 之后、只读白名单之前：只读白名单是看命令形状的，不看路径，否则 cat ~/.ssh/id_rsa 会被零审查放行。",
@@ -67,8 +67,10 @@
     "cache_ttl_s": 86400,
     "reasoning_effort": "low",
     "user_agent": "ZCode/3.11.2",
-    "never_ask": true,
-    "_never_ask_note": "true = 模型必须二选一（ALLOW / DENY），拒绝是硬阻断、不弹窗；用户确认后重试会放行。false = 恢复旧行为（模型可以说「交人工」→ 弹窗）。",
+    "never_ask": false,
+    "_never_ask_note": "false（默认）= 模型可以三选一：ALLOW / DENY（明确有害，硬阻断）/ ASK（不确定，交人工）。\n    true = 取消 ASK，模型必须二选一，所有拒绝都变成硬阻断。\n    为什么默认 false：实测按项目统计，用户自己的项目里只有 2%~4% 的命令会弹窗，而这些弹窗几乎都是「模型缺少授权上下文」造成的误判（例：用户刚要求过的推送、读代码、改配置）。把它们变成硬阻断会直接卡住用户交代的任务，代价远大于多点一下。",
+    "context_messages": 4,
+    "context_chars": 1600,
     "use_user_context": true,
     "breaker_consecutive_error": 3,
     "breaker_consecutive_ask": 0,
